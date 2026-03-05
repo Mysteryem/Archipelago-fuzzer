@@ -18,14 +18,12 @@ class HookMissingIndirectConditionError(Exception):
     pass
 
 
-class HookIndirectConditionCheckingCollectionState(CollectionState):
-    # A stack should not normally be necessary, but it is possible that there is a weird world out there that stales the
-    # region reachability cache from within an access rule.
-    _hook_entrance_stack: list[Entrance]
+class HookUndefinedBehaviourError(Exception):
+    pass
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._hook_entrance_stack = []
+
+class HookIndirectConditionCheckingCollectionState(CollectionState):
+    _hook_last_entrance: Entrance | None = None
 
     # Copied from github.com/ArchipelagoMW/Archipelago b372b02273436874dd7c5ce145387f96339eb5ed and then modified
     def _update_reachable_regions_explicit_indirect_conditions(self, player: int, queue: deque[Entrance]):
@@ -39,11 +37,17 @@ class HookIndirectConditionCheckingCollectionState(CollectionState):
                 blocked_connections.remove(connection)
             else:
                 # New code start.
-                if self._hook_entrance_stack:
-                    raise HookMissingIndirectConditionError("Entrance stack is already populated. This is undefined behaviour.")
-                self._hook_entrance_stack.append(connection)
+                if self._hook_last_entrance is not None:
+                    raise HookUndefinedBehaviourError(
+                        f"_update_reachable_regions_explicit_indirect_conditions has been called by"
+                        f" Entrance.can_reach() on {self._hook_last_entrance}. Recursively calling"
+                        f" `_update_reachable_regions_explicit_indirect_conditions()` from itself, which is undefined"
+                        f" behaviour.")
+                self._hook_last_entrance = connection
+                # Region.can_reach() calls made by calling `connection.can_reach(self)` will check for indirect
+                # conditions being registered between `connection` and the region in question.
                 reachable = connection.can_reach(self)
-                self._hook_entrance_stack.pop()
+                self._hook_last_entrance = None
                 # `if reachable` replaces `elif connection.can_reach(self)`.
                 if reachable:
                     # New code end.
@@ -82,18 +86,17 @@ def iterate_all_spheres(state: CollectionState):
 
 class Hook(BaseHook):
     failures: list[str]
-    # A WeakSet is used because Regions keep reference to the MultiWorld object.
-    seen: set[tuple[Entrance, Region]]
+    seen_region_access_by_an_entrance: set[tuple[Entrance, Region]]
 
     def setup_main(self, args):
         super().setup_main(args)
         self.failures = []
-        self.seen = set()
+        self.seen_region_access_by_an_entrance = set()
 
     def before_generate(self, args):
         super().before_generate(args)
         self.failures = []
-        self.seen = set()
+        self.seen_region_access_by_an_entrance = set()
 
     def after_generate(self, mw: MultiWorld | None, output_path) -> None:
         super().after_generate(mw, output_path)
@@ -117,9 +120,9 @@ class Hook(BaseHook):
             state = HookIndirectConditionCheckingCollectionState(mw)
             iterate_all_spheres(state)
         finally:
-            # Clear out `self.seen` to allow the entrances and regions within it to be garbage collected sooner than the
-            # next `before_generate()` call.
-            self.seen.clear()
+            # Clear out `self.seen_region_access_by_an_entrance` to allow the entrances and regions within it to be
+            # garbage collected sooner than the next `before_generate()` call.
+            self.seen_region_access_by_an_entrance.clear()
 
     def reclassify_outcome(self, outcome, raised):
         if outcome == GenOutcome.Success:
@@ -140,53 +143,39 @@ class Hook(BaseHook):
         original = r.can_reach
 
         def region_can_reach_fuzzer_hook_override(state: CollectionState) -> bool:
-            entrance_stack = getattr(state, "_hook_entrance_stack", None)
-            if entrance_stack:
-                last_entrance = entrance_stack[-1]
-                if last_entrance.parent_region is not r:
-                    key = (last_entrance, r)
-                    if key not in self.seen:
-                        self.seen.add(key)
-                        indirect_conditions = state.multiworld.indirect_connections.get(r)
-                        if indirect_conditions is None or last_entrance not in indirect_conditions:
-                            if last_entrance.connected_region is r:
-                                # Technically, worlds can have an entrance to a region that is only accessible once the
-                                # player already has access to that region, e.g. entering the region unlocks a shortcut
-                                # back to it, but this entrance is logically irrelevant because the path used to gain
-                                # access to the region will always use a different entrance.
-                                # For better performance, it would be best to delete these logically irrelevant
-                                # entrances if no other logic depends on them.
-                                pass
-                            else:
-                                stack = traceback.format_stack()
-                                # Strip off everything before getting to code within this hook.
-                                for i, line in enumerate(stack):
-                                    if "after_generate" in line:
-                                        stack = stack[i+1:]
-                                        break
-                                if len(entrance_stack) == 1:
-                                    entrance = entrance_stack[0]
-                                    entrances = f"entrance.can_reach '{entrance}'"
-                                    parent_regions_str = f"parent_region: '{entrance.parent_region}'"
-                                    connected_regions_str = f"connected_region: '{entrance.connected_region}'"
-                                else:
-                                    entrances = f"entrance chain '{entrance_stack}'"
-                                    parent_regions = [entrance.parent_region for entrance
-                                                      in entrance_stack]
-                                    parent_regions_str = f"recursive parent_regions: {parent_regions}"
-                                    connected_regions = [entrance.connected_region for entrance
-                                                         in entrance_stack]
-                                    connected_regions_str = f"recursive connecting_regions: {connected_regions}"
-                                error_msg = (
-                                    f"region.can_reach call to region '{r}' from {entrances} without an indirect"
-                                    f" condition registered."
-                                    f"\nRegistered indirect conditions for '{r}' are:"
-                                    f"\n {indirect_conditions}"
-                                    f"\n  {parent_regions_str}"
-                                    f"\n  {connected_regions_str}."
-                                    f"\n Traceback:"
-                                    f"\n{''.join(stack)}")
-                                self.failures.append(error_msg)
+            last_entrance = getattr(state, "_hook_last_entrance", None)
+            if last_entrance is not None and last_entrance.parent_region is not r:
+                key = (last_entrance, r)
+                if key not in self.seen_region_access_by_an_entrance:
+                    self.seen_region_access_by_an_entrance.add(key)
+                    indirect_conditions = state.multiworld.indirect_connections.get(r)
+                    if indirect_conditions is None or last_entrance not in indirect_conditions:
+                        if last_entrance.connected_region is r:
+                            # Technically, worlds can have an entrance to a region that is only accessible once the
+                            # player already has access to that region, e.g. entering the region unlocks a shortcut
+                            # back to it, but this entrance is logically irrelevant because the path used to gain
+                            # access to the region will always use a different entrance.
+                            # For better performance, it would be best to delete these logically irrelevant
+                            # entrances if no other logic depends on them.
+                            pass
+                        else:
+                            stack = traceback.format_stack()
+                            # Strip off everything before getting to code within this hook. This primarily removes a
+                            # bunch of multiprocessing frames.
+                            for i, line in enumerate(stack):
+                                if "after_generate" in line:
+                                    stack = stack[i+1:]
+                                    break
+                            error_msg = (
+                                f"entrance.can_reach for entrance '{last_entrance}' called region.can_reach for region"
+                                f" '{r}' without an indirect condition registered."
+                                f"\nRegistered indirect conditions for '{r}' are:"
+                                f"\n {indirect_conditions}"
+                                f"\nThe parent_region of '{r}' is '{last_entrance.parent_region}'"
+                                f"\nThe connected_region of '{r}' is '{last_entrance.connected_region}'."
+                                f"\nTraceback:"
+                                f"\n{''.join(stack)}")
+                            self.failures.append(error_msg)
             return original(state)
 
         r.can_reach = region_can_reach_fuzzer_hook_override

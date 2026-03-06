@@ -4,6 +4,12 @@ A fuzzer hook that detects missing indirect conditions.
 This hook cannot detect issues with worlds that entirely override can_reach() in their Region subclasses to no longer
 call the normal CollectionState.update_reachable_regions(), e.g. OoT has its own implementation to handle its two
 separate region graphs.
+
+This hook can detect missing indirect conditions that have no effect on logic. This can happend because either:
+a. The region whose access is being checked is always accessible before the entrance is accessible
+b. The entrance is always accessible before the region is accessible, e.g. if the entrance rule is
+  `state.can_reach_region("my_region", self.player) and state.has("my_event", self.player)` and "my_event" is always
+  collected before "my_region" becomes accessible.
 """
 
 import traceback

@@ -1,14 +1,15 @@
 """
-A fuzzer hook that detects missing indirect conditions.
+A fuzzer hook that detects missing indirect conditions and reports the tracebacks of the entrance rules that are missing
+indirect conditions.
 
 This hook cannot detect issues with worlds that entirely override can_reach() in their Region subclasses to no longer
 call the normal CollectionState.update_reachable_regions(), e.g. OoT has its own implementation to handle its two
 separate region graphs.
 
-This hook can detect missing indirect conditions that have no effect on logic. This can happend because either:
-a. The region whose access is being checked is always accessible before the entrance is accessible
-b. The entrance is always accessible before the region is accessible, e.g. if the entrance rule is
-  `state.can_reach_region("my_region", self.player) and state.has("my_event", self.player)` and "my_event" is always
+This hook can detect missing indirect conditions that have no effect on logic. This can happen because either:
+a. The region whose access is being checked is always accessible before the entrance is checked for being accessible.
+b. The entrance is always accessible before the region is accessible, for example, if the entrance rule is
+  `state.can_reach_region("my_region", self.player) or state.has("my_event", self.player)` and "my_event" is always
   collected before "my_region" becomes accessible.
 """
 
@@ -29,9 +30,10 @@ class HookUndefinedBehaviourError(Exception):
 
 
 class HookIndirectConditionCheckingCollectionState(CollectionState):
+    """Rather than patching CollectionState, this CollectionState subclass is used."""
     _hook_last_entrance: Entrance | None = None
 
-    # Copied from github.com/ArchipelagoMW/Archipelago b372b02273436874dd7c5ce145387f96339eb5ed and then modified
+    # Copied from github.com/ArchipelagoMW/Archipelago at b372b02273436874dd7c5ce145387f96339eb5ed, and then modified.
     def _update_reachable_regions_explicit_indirect_conditions(self, player: int, queue: deque[Entrance]):
         reachable_regions = self.reachable_regions[player]
         blocked_connections = self.blocked_connections[player]
@@ -44,6 +46,8 @@ class HookIndirectConditionCheckingCollectionState(CollectionState):
             else:
                 # New code start.
                 if self._hook_last_entrance is not None:
+                    # A recursive call does not sound good, it could recurse again, and updating `reachable_regions` and
+                    # `blocked_connections` while they are in the middle of being updated does not sound good either.
                     raise HookUndefinedBehaviourError(
                         f"_update_reachable_regions_explicit_indirect_conditions has been called by"
                         f" Entrance.can_reach() on {self._hook_last_entrance}. Recursively calling"

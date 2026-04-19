@@ -181,8 +181,8 @@ class Hook(BaseHook):
                                 f" '{r}' without an indirect condition registered."
                                 f"\nRegistered indirect conditions for '{r}' are:"
                                 f"\n {indirect_conditions}"
-                                f"\nThe parent_region of '{r}' is '{last_entrance.parent_region}'"
-                                f"\nThe connected_region of '{r}' is '{last_entrance.connected_region}'."
+                                f"\nThe parent_region of '{last_entrance}' is '{last_entrance.parent_region}'"
+                                f"\nThe connected_region of '{last_entrance}' is '{last_entrance.connected_region}'."
                                 f"\nTraceback:"
                                 f"\n{''.join(stack)}")
                             self.failures.append(error_msg)

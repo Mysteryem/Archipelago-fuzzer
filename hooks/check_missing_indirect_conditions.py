@@ -170,6 +170,9 @@ class Hook(BaseHook):
                             pass
                         else:
                             stack = traceback.format_stack()
+                            # Strip off the `stack = traceback.format_stack()` lines.
+                            if "stack = traceback.format_stack()" in stack[-1]:
+                                stack = stack[:-2]
                             # Strip off everything before getting to code within this hook. This primarily removes a
                             # bunch of multiprocessing frames.
                             for i, line in enumerate(stack):

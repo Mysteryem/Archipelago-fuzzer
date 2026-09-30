@@ -29,24 +29,36 @@ game: {_GAME_NAME}
             # The metaclass handles registration into AutoWorldRegister when the class is created.
             class EmptyWorld(World):
                 game = _GAME_NAME
-                item_name_to_id = {"Nothing": 1}
+                item_name_to_id = {"Goal Macguffin": 999} | {f"Filler Item {i+1}": i+1 for i in range(99)}
                 location_name_to_id = {f"Location {i+1}": i+1 for i in range(100)}
                 hidden = True
                 web = EmptyWebWorld()
 
+                def create_item(self, name: str) -> Item:
+                    item_id = self.item_name_to_id[name]
+                    return Item(
+                        name,
+                        ItemClassification.progression if name == "Goal Macguffin" else ItemClassification.filler,
+                        item_id,
+                        self.player,
+                    )
+
                 def create_items(self) -> None:
-                    # Add 100 filler Nothings to the item pool.
-                    for _ in range(100):
-                        item = Item("Nothing", ItemClassification.filler, 1, self.player)
-                        self.multiworld.itempool.append(item)
+                    self.multiworld.itempool.extend(map(self.create_item, self.item_name_to_id))
 
                 def create_regions(self) -> None:
                     # Create 100 locations in the origin region that are accessible from the start.
                     origin = Region(self.origin_region_name, self.player, self.multiworld)
                     self.multiworld.regions.append(origin)
-                    for i in range(100):
-                        location = Location(self.player, f"Location {i+1}", i+1, origin)
-                        origin.locations.append(location)
+                    origin.add_locations(
+                        self.location_name_to_id,
+                        Location,
+                    )
+
+                def set_rules(self) -> None:
+                    self.multiworld.completion_condition[self.player] = lambda state: state.has(
+                        "Goal Macguffin", self.player
+                    )
 
             network_data_package["games"][EmptyWorld.game] = EmptyWorld.get_data_package_data()
 

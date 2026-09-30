@@ -168,9 +168,9 @@ class Hook(BaseHook):
         # Propagate a HookTestFailure raised during generation.
         if isinstance(raised, HookTestFailure):
             return super().reclassify_outcome(outcome, raised)
-        # Ignore general generation failures.
-        if outcome == GenOutcome.Failure:
+        # Ignore any other non-success.
+        if outcome != GenOutcome.Success:
             return GenOutcome.OptionError, raised
-        # Propagate anything else.
+        # Propagate success.
         return super().reclassify_outcome(outcome, raised)
 
